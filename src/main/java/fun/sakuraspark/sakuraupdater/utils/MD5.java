@@ -23,15 +23,21 @@ public class MD5 {
 
     // MD5计算方法，接受文件路径输入
     public static String calculateMD5(java.io.File file) {
-        try {
+        return calculateMD5(file, null);
+    }
+
+    // MD5计算方法，接受文件路径输入；每读一块就把读到的字节数交给 progress（可为 null）
+    public static String calculateMD5(java.io.File file, java.util.function.LongConsumer progress) {
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(file)) {
             java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
-            java.io.FileInputStream fis = new java.io.FileInputStream(file);
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[65536];
             int bytesRead;
             while ((bytesRead = fis.read(buffer)) != -1) {
                 md.update(buffer, 0, bytesRead);
+                if (progress != null) {
+                    progress.accept(bytesRead);
+                }
             }
-            fis.close();
             byte[] digest = md.digest();
             StringBuilder sb = new StringBuilder();
             for (byte b : digest) {
@@ -43,4 +49,3 @@ public class MD5 {
         }
     }
 }
-

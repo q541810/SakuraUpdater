@@ -29,6 +29,7 @@ public class StandaloneServerConfig {
     private static int port = 25564;
     private static int maxThreads = 32;
     private static List<String> syncDirs = new ArrayList<>();
+    private static String releaseDir = "sakuraupdater-release";
 
     private StandaloneServerConfig() {
         // 工具类，禁止实例化
@@ -100,8 +101,15 @@ public class StandaloneServerConfig {
                     }
                     syncDirs = parsed;
                 }
+
+                // RELEASE_DIR
+                Object releaseObj = config.get("RELEASE_DIR");
+                if (releaseObj instanceof String s && !s.isBlank()) {
+                    releaseDir = s.trim();
+                }
             }
-            LOGGER.info("Standalone config loaded successfully. port={}, syncDirs={}", port, syncDirs);
+            LOGGER.info("Standalone config loaded successfully. port={}, syncDirs={}, releaseDir={}", port, syncDirs,
+                    releaseDir);
         } catch (Exception e) {
             LOGGER.error("Failed to load config file '{}', using defaults", CONFIG_FILE, e);
         }
@@ -120,8 +128,14 @@ public class StandaloneServerConfig {
                 #Every in-flight file download occupies one thread, so keep it >= (client download_connections * expected concurrent updating players).
                 #Range: 4 ~ 256
                 max_threads = 32
+                #Directory holding the published snapshot of the sync source directories.
+                #Only 'commit' and 'data repair' write here: they mirror the sync source directories into this directory and build the file list from it, and the file server only serves files from here.
+                #As a result, adding/removing/overwriting files in the sync directories WITHOUT committing no longer affects clients: they keep getting the last published snapshot.
+                #Do NOT edit files in this directory by hand, it is managed by SakuraUpdater.
+                RELEASE_DIR = "sakuraupdater-release"
                 #A list of sync directories, each entry should be in the format 'targetpath:mode[:sourcepath:sourcepath2:...]', e.g. 'mod:mirror' or 'config:push:clientconfig'.
                 #The 'targetpath' is the client target path of sync, and 'sourcepath' is the server source path of sync.
+                #These source directories are the ones you edit by hand; they are copied into RELEASE_DIR when you commit.
                 #The 'sourcepath' is optional, if not provided, it will be the same as 'targetpath'.
                 #'mode' can be 'mirror', 'push' or 'ignore'. 'mirror' will delete files in the target directory that are not in the source directory, while 'push' will not.
                 #'ignore' mode uses regex to exclude files. Since the path is included, '.*filename$' is recommended (e.g., 'mods:ignore:.*abc\\.jar$').
@@ -175,6 +189,10 @@ public class StandaloneServerConfig {
     public static List<String> getSyncDirs() {
         loadConfig(); // 每次获取时重新加载配置，确保获取最新值
         return List.copyOf(syncDirs);
+    }
+
+    public static String getReleaseDir() {
+        return releaseDir;
     }
 
 }

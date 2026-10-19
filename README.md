@@ -22,6 +22,8 @@ SakuraUpdater is a NeoForge Minecraft mod that enables automatic synchronization
 - [x] 📊 Byte-accurate progress (total / downloaded / remaining, speed and ETA)
 - [x] ⚙️ Configurable client and server settings
 - [x] 🚀 The server can run independently
+- [x] 📦 Snapshot publishing: only `commit` publishes, so editing a sync directory without committing never reaches clients
+- [x] 🔍 `data diff` shows what a commit would change, or what has changed since a given version
 
 ## Installation
 
@@ -72,7 +74,15 @@ If acquisition fails, the log names the library, attempted URLs, and causes. Che
 # File server port
 port = 25564
 
+# Directory holding the published snapshot of the sync source directories.
+# Only 'commit' and 'data repair' write here: they copy the sync source directories into this directory and build the
+# file list from it, and the file server only serves files from here. Adding/removing/overwriting files in the sync
+# directories WITHOUT committing therefore no longer affects clients - they keep getting the last published snapshot.
+# Do NOT edit files in this directory by hand, it is managed by SakuraUpdater.
+RELEASE_DIR = "sakuraupdater-release"
+
 # Sync directory configuration, format: ["target_dir:mode:source_dir:extra_source_dir:..."]
+# These are the directories you edit by hand; they are copied into RELEASE_DIR when you commit.
 # Mode explanations:
 # - mirror: mirror mode, fully synchronize source directory to the target directory
 # - push: push mode, push server files to clients
@@ -85,6 +95,20 @@ SYNC_DIR = [
     "mods:ignore:.*abc\.jar$"                # ignore files in mods ending with 'abc.jar'
 ]
 ```
+
+#### Publishing: what `commit` actually does
+
+`commit` (and `data repair`) copies your sync source directories into `RELEASE_DIR`, and the file list is built from that copy. Clients only ever download from `RELEASE_DIR`.
+
+That keeps the file list and the downloadable files in agreement at all times, even if you forget to commit:
+
+- Deleting or overwriting a file in a sync directory **without committing** no longer affects clients. They keep getting the last published snapshot, so a forgotten commit can no longer leave players stuck on the update screen forever.
+- An accidental delete on the server does not propagate to players.
+- Nothing takes effect until you `commit`: a deleted file is then removed on clients, and a changed file is re-downloaded.
+- Every source directory in `SYNC_DIR` must exist when you `commit`. If one is missing (wrong path, drive not mounted), the commit fails with an error and nothing is published. Create the directory or fix the entry first.
+- `RELEASE_DIR` holds a full copy of the synced files, so it needs roughly as much disk space as the sync source directories.
+- `commit` and `data repair` copy and hash files with several threads in the background, so a big modpack does not freeze the server. Progress bars (`Copying` / `Hashing`) are echoed to whoever ran the command (or the console in standalone mode), and the result follows when it finishes. Only one commit/repair can run at a time.
+- On the first upgrade there is no `RELEASE_DIR` yet. On the next start the server creates it **automatically**, as long as the sync directories still match the latest committed version. If you have uncommitted changes, it keeps the old behaviour and logs a warning — run one `commit` (or `data repair <version>`) to switch over.
 
 ### Client configuration (`sakuraupdater-client.toml`)
 
@@ -127,8 +151,13 @@ now_version = ""
 # Edit version description (only the description: the file list and the timestamp are left untouched)
 /sakuraupdater data edit v1.0.1 "Updated version description"
 
-# Rebuild a version's file list from the current sync directories
+# Re-publish and rebuild a version's file list from the published snapshot
 /sakuraupdater data repair v1.0.1
+
+# Show what a commit would change right now (published snapshot vs the latest version),
+# or diff the published snapshot against a specific version
+/sakuraupdater data diff
+/sakuraupdater data diff v1.0.1
 
 # Delete a version
 /sakuraupdater data delete v1.0.1
@@ -137,6 +166,14 @@ now_version = ""
 /sakuraupdater data clear
 ```
 
+> `data repair <version>` is for versions whose file list is empty — for example versions damaged by an older build's `data edit` bug, or versions that were never committed properly. For the newest version it re-publishes the sync directories into `RELEASE_DIR` and rebuilds the list from that snapshot. For an older version it does **not** publish anything (otherwise uncommitted changes would leak out); it only rebuilds the list from the current contents of `RELEASE_DIR`. It keeps the description and timestamp, so the order of your update log does not change. Note that it records the **current** contents of your sync directories, not a historical snapshot of that release.
+
+> `data diff` is read-only: it publishes nothing and changes no data. It compares the files in `RELEASE_DIR` against a version's recorded file list (the latest version by default, or the one you pass). It is mainly for finding the state that makes clients loop forever — *listed but not served*. Lines are grouped as:
+> - **Served but not listed** — clients can download it, but no version records it (usually a `SYNC_DIR` mismatch).
+> - **Listed but NOT served** — the list references a file the snapshot cannot serve. This is the dangerous state; run `data repair <version>` to fix it.
+> - **Content differs** — the listed md5 does not match the published file.
+>
+> Normally it prints "no differences". Running the diff right after a commit is a quick health check.
 ### 2. Client player operations
 
 #### Automatic update check
@@ -164,6 +201,8 @@ SakuraUpdater 是一个 Minecraft NeoForge 模组，用于自动更新服务器�
 - [x] 📊 按字节推进的进度（总共需要 / 已下载 / 剩余，含速度与预计剩余时间）
 - [x] ⚙️ 可配置的客户端和服务器设置
 - [x] 🚀 服务端可独立运行
+- [x] 📦 快照发布：只有 `commit` 才发布，改了同步目录但没 commit 不会影响客户端
+- [x] 🔍 `data diff` 查看现在 commit 会改什么，或某个版本至今改了什么
 
 ## 安装步骤
 
@@ -214,7 +253,14 @@ java -jar sakuraupdater-[version].jar
 # 文件服务器端口
 port = 25564
 
+# 发布目录：保存同步源目录的发布快照。
+# 只有 commit 和 data repair 会写这里：它们把同步源目录复制进来，名单也从这份复制生成，文件服务器只从这里发文件。
+# 因此，在同步目录里增删改文件但没 commit，不会再影响客户端——客户端始终拿到上一次发布的快照。
+# 不要手动改动这个目录里的文件，它由 SakuraUpdater 维护。
+RELEASE_DIR = "sakuraupdater-release"
+
 # 同步目录配置，格式: ["目标目录:模式:源目录:额外的源目录:..."]
+# 这些是你手工编辑的目录，commit 时会被复制进 RELEASE_DIR。
 # 模式说明:
 # - mirror: 镜像模式，完全同步源目录到目标目录
 # - push: 推送模式，将服务器文件推送到客户端
@@ -227,6 +273,20 @@ SYNC_DIR = [
     "mods:ignore:.*abc\.jar$"                # 忽略以 abc.jar 结尾的文件
 ]
 ```
+
+#### 发布机制：`commit` 到底做了什么
+
+`commit`（以及 `data repair`）会把你的同步源目录复制进 `RELEASE_DIR`，名单再从这份复制扫描生成。客户端只从 `RELEASE_DIR` 下载。
+
+这样，"名单"和"客户端能下到的文件"始终一致，即使你忘了 commit 也没关系：
+
+- 在同步目录里删掉或覆盖文件**但没 commit**，不会再影响客户端。客户端继续拿到上一次发布的快照，所以"忘了 commit"不会再让玩家永久卡在更新界面。
+- 在服务端误删一个文件，不会传染给玩家。
+- 一切以 `commit` 为准：commit 之后，被删的文件才会在客户端上删除，被改的文件才会重新下载。
+- `SYNC_DIR` 里的每个源目录在 `commit` 时都必须存在。缺任何一个（路径写错、盘没挂上）都会报错并且不发布任何东西，请先创建目录或改正条目。
+- `RELEASE_DIR` 里是同步文件的一份完整副本，需要和同步源目录差不多大的磁盘空间。
+- `commit` 和 `data repair` 在后台用多线程复制并计算校验和，大型整合包也不会卡住服务器。进度条（`Copying` / `Hashing`）会回显给执行命令的人（独立模式输出到控制台），结束后再给出结果。同一时间只能运行一个 commit / repair。
+- 首次升级时还没有 `RELEASE_DIR`。下次启动时，只要同步目录的内容和最新版本记录的完全一致，服务端就会**自动**把它建好；如果你有没 commit 的改动，它会保持旧做法并打一条警告——这时跑一次 `commit`（或 `data repair <版本>`）即可切换。
 
 ### 客户端配置 (`sakuraupdater-client.toml`)
 
@@ -269,8 +329,12 @@ now_version = ""
 # 编辑版本描述（只改描述：文件清单与时间戳都不会被动）
 /sakuraupdater data edit v1.0.1 "更新了版本描述"
 
-# 重建某个版本的文件清单（按当前同步目录重新扫描）
+# 重新发布，并按发布快照重建某个版本的文件清单
 /sakuraupdater data repair v1.0.1
+
+# 查看现在 commit 会改什么（发布快照 vs 最新版本），或与指定版本对比
+/sakuraupdater data diff
+/sakuraupdater data diff v1.0.1
 
 # 删除版本
 /sakuraupdater data delete v1.0.1
@@ -279,6 +343,14 @@ now_version = ""
 /sakuraupdater data clear
 ```
 
+> `data repair <版本>` 用于文件清单为空的版本——例如被旧版本 `data edit` 的 bug 清空过的版本，或当时没 commit 好的版本。对最新版本，它会先把同步目录重新发布进 `RELEASE_DIR`，再按这份快照重建清单；对旧版本，它**不会发布**任何东西（否则没 commit 的改动会被放出去），只按 `RELEASE_DIR` 当前的内容重建清单。它会保留描述与时间戳，所以不会打乱更新日志的顺序。注意：它记录的是**当前**同步目录里的内容，不是那一版当时的历史快照。
+
+> `data diff` 是只读命令：不发布、不改任何数据。它把 `RELEASE_DIR` 里的实际文件与某个版本的名单对比（默认最新版本，也可以指定版本号）。主要用途是找出会让客户端无限更新的状态——**名单里有、但发不出去**。输出分三类：
+> - **Served but not listed（能发但名单没有）**：客户端下得到，但没有任何版本记录它（通常是 `SYNC_DIR` 配错了）。
+> - **Listed but NOT served（名单有但发不出去）**：名单引用了一个快照里没有的文件。这是危险状态，用 `data repair <版本>` 修。
+> - **Content differs（内容不一致）**：名单里的 md5 与发布出去的文件对不上。
+>
+> 正常情况下会显示"无差异"。刚 commit 完跑一次，可以当作一次体检。
 ### 2. 客户端玩家操作
 
 #### 自动检查更新

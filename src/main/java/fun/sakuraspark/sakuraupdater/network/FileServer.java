@@ -7,6 +7,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +29,8 @@ import fun.sakuraspark.sakuraupdater.config.DataConfig.FileData;
 import fun.sakuraspark.sakuraupdater.config.DataConfig.PathData;
 import fun.sakuraspark.sakuraupdater.config.ServerConfig;
 import fun.sakuraspark.sakuraupdater.config.StandaloneServerConfig;
+import fun.sakuraspark.sakuraupdater.utils.ReleasePublisher;
+import fun.sakuraspark.sakuraupdater.utils.ServerCommandsHelper;
 
 
 
@@ -41,6 +46,9 @@ public class FileServer {
 
     // 存储所有可用文件信息
     private final Map<String, File> availableFiles = new HashMap<>();
+
+    /** 发布目录（commit 时把源目录镜像到这里）；启动时解析一次。 */
+    private volatile Path releaseRoot;
 
     public FileServer(int port) {
         this.port = port;
@@ -68,9 +76,60 @@ public class FileServer {
             httpServer.start();
             isRunning = true;
             LOGGER.info("File server started on port: {} (thread pool size: {})", port, maxThreads);
+
+            // 发布目录：commit 会把手写的同步目录镜像到这里，文件服务器只从这里发文件。
+            // 还没有发布目录时先尝试升级自动迁移（只有源目录和最新版本完全一致才会动手）；
+            // 仍然没有的话保持旧行为——直接从同步目录发，并提示去 commit 一次。
+            releaseRoot = ReleasePublisher.releaseRoot();
+            ReleasePublisher.refreshPublishedState();
+            if (!ReleasePublisher.isPublished()) {
+                ServerCommandsHelper.autoMigrateSnapshot();
+            }
+            if (ReleasePublisher.isPublished()) {
+                LOGGER.info("Published snapshot directory: {}", releaseRoot);
+                warnAboutMissingPublishedFiles();
+            } else {
+                LOGGER.warn("No published snapshot found at {}. Serving files directly from the sync directories "
+                        + "(legacy behaviour), so deleting or overwriting a synced file before committing can still "
+                        + "leave clients stuck in an endless update. Run 'commit' (or 'data repair <version>') once to "
+                        + "switch to snapshot publishing.", releaseRoot);
+            }
         } catch (IOException e) {
             LOGGER.error("Failed to start file server", e);
             shutdown();
+        }
+    }
+
+    /**
+     * 启动时体检：最新版本的名单里有没有"发布目录里根本没有"的文件。
+     * 这正是会让客户端无限更新的状态；这里只告警，不自动改数据。
+     */
+    private void warnAboutMissingPublishedFiles() {
+        Data lastData = DataConfig.getLastData();
+        if (lastData == null || lastData.paths == null) {
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        for (PathData pathData : lastData.paths) {
+            if (pathData.files == null) {
+                continue;
+            }
+            for (FileData fileData : pathData.files) {
+                try {
+                    // 发布目录按 targetPath 摆放，体检也按 targetPath 对
+                    if (!Files.isRegularFile(ReleasePublisher.resolveInRelease(releaseRoot, fileData.targetPath))) {
+                        missing.add(fileData.targetPath);
+                    }
+                } catch (IOException e) {
+                    missing.add(fileData.targetPath);
+                }
+            }
+        }
+        if (!missing.isEmpty()) {
+            LOGGER.warn("Version {} lists {} file(s) that are missing from the published snapshot at {}. Clients that "
+                    + "need them will keep failing to update. Run 'data repair {}' on the server to rebuild the list "
+                    + "from the snapshot. Missing: {}", lastData.version, missing.size(), releaseRoot, lastData.version,
+                    missing);
         }
     }
 
@@ -216,6 +275,63 @@ public class FileServer {
         }
     }
 
+    /** {@link #locate} 的结果：file 非 null 表示可以发送；否则 status/message 是该返回的错误。 */
+    public static final class Located {
+        public final File file;
+        public final int status;
+        public final String message;
+
+        private Located(File file, int status, String message) {
+            this.file = file;
+            this.status = status;
+            this.message = message;
+        }
+    }
+
+    /**
+     * 客户端请求 {@code requested}（名单里的 sourcePath）时该发哪个文件。
+     * 先在最新版本的名单里查；发布模式下用名单项的 targetPath 去发布目录取（并防止路径逃逸），
+     * 否则沿用旧行为直接从同步目录发。抽成静态方法是为了不用起 HTTP 服务和数据库就能测试。
+     */
+    public static Located locate(Data lastData, String requested, Path releaseRoot, boolean published) {
+        FileData matched = null;
+        if (lastData != null && lastData.paths != null) {
+            for (PathData pathData : lastData.paths) {
+                if (pathData.files == null) {
+                    continue;
+                }
+                for (FileData fileData : pathData.files) {
+                    if (fileData.sourcePath.equals(requested)) {
+                        matched = fileData;
+                        break;
+                    }
+                }
+                if (matched != null) {
+                    break;
+                }
+            }
+        }
+        if (matched == null) {
+            return new Located(null, 403, "File not found in list");
+        }
+        File file;
+        if (published) {
+            // 名单的 md5 就是按发布副本记的，所以"名单里有"必然"发得出来"。
+            // 客户端回传的是 sourcePath（源目录里的原始路径），发布目录按 targetPath 摆放，所以要换算
+            try {
+                file = ReleasePublisher.resolveInRelease(releaseRoot, matched.targetPath).toFile();
+            } catch (IOException e) {
+                return new Located(null, 403, "Invalid file path");
+            }
+        } else {
+            file = new File(requested); // 还没有发布目录，沿用旧行为直接从同步目录发
+        }
+        if (!file.exists() || !file.isFile()) {
+            return new Located(null, 404, "File not found in server");
+        }
+        return new Located(file, 200, null);
+    }
+
     /**
      * 文件下载处理器
      */
@@ -233,35 +349,21 @@ public class FileServer {
                         return;
                     }
                     
-                    // 验证文件是否在允许列表中
-                    boolean fileFound = false;
-                    Data lastData = DataConfig.getLastData();
-                    if (lastData != null) {
-                        for (PathData pathData : lastData.paths) {
-                            for (FileData fileData : pathData.files) {
-                                if (fileData.sourcePath.equals(fileName)) {
-                                    fileFound = true;
-                                    break;
-                                }
-                            }
-                            if (fileFound) {
-                                break;
-                            }
+                    // 名单校验 + 取文件路径（发布模式下按 targetPath 去发布目录取）
+                    Located located = locate(DataConfig.getLastData(), fileName, releaseRoot,
+                            ReleasePublisher.isPublished());
+                    if (located.file == null) {
+                        if (located.status == 404) {
+                            LOGGER.warn("This file is in the list but not present in the server, please don't forget "
+                                    + "commit: {}", fileName);
+                        } else if (located.status == 403) {
+                            LOGGER.debug("Rejected download request for {}: {}", fileName, located.message);
                         }
-                    }
-                    
-                    if (!fileFound) {
-                        sendError(exchange, 403, "File not found in list");
+                        sendError(exchange, located.status, located.message);
                         return;
                     }
-                    
-                    File file = new File(fileName);
-                    if (!file.exists() || !file.isFile()) {
-                        LOGGER.warn("This file in list but not found in local, please don't forget commit: {}", fileName);
-                        sendError(exchange, 404, "File not found in server");
-                        return;
-                    }
-                    
+                    File file = located.file;
+
                     try {
                         long fileSize = file.length();
 

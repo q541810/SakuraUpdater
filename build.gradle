@@ -256,6 +256,16 @@ tasks.register('downloadProgressTest', JavaExec) {
 }
 tasks.named('check') { dependsOn tasks.named('downloadProgressTest') }
 
+// 发布目录（快照）的集成测试：只用 JDK + slf4j（ReleasePublisher 用它打日志）。
+// 覆盖"改了源目录却没 commit 时客户端仍能正常更新"这条回归。
+tasks.register('releasePublisherTest', JavaExec) {
+    dependsOn tasks.named('testClasses')
+    classpath = files(sourceSets.test.output, sourceSets.main.output) + configurations.downloadProgressTestRuntime
+    mainClass = 'fun.sakuraspark.sakuraupdater.ReleasePublisherTest'
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }
+}
+tasks.named('check') { dependsOn tasks.named('releasePublisherTest') }
+
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
     module {

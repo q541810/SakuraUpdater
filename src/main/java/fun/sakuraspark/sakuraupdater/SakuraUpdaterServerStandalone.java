@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import fun.sakuraspark.sakuraupdater.config.DataConfig;
 import fun.sakuraspark.sakuraupdater.config.StandaloneServerConfig;
 import fun.sakuraspark.sakuraupdater.network.FileServer;
+import fun.sakuraspark.sakuraupdater.utils.PublishProgress;
 import fun.sakuraspark.sakuraupdater.utils.ServerCommandsHelper;
 
 /**
@@ -214,7 +215,18 @@ public class SakuraUpdaterServerStandalone {
                                         "Invalid command format. Usage: sakuraupdater data repair <version>");
                                 return;
                             }
-                            ServerCommandsHelper.CommandResult result = ServerCommandsHelper.repairData(parts[0]);
+                            ServerCommandsHelper.CommandResult result = ServerCommandsHelper.repairData(parts[0],
+                                    PublishProgress.throttled(LOGGER::info, 1000));
+                            if (result.success) {
+                                LOGGER.info(result.message);
+                            } else {
+                                LOGGER.warn(result.message);
+                            }
+                        }))
+                        .then(new CommandDispatcher("diff").execute(cmd -> {
+                            // 可以不带参数（用最新版本），也可以带版本号
+                            String version = cmd.trim().isEmpty() ? null : cmd.trim();
+                            ServerCommandsHelper.CommandResult result = ServerCommandsHelper.diffData(version);
                             if (result.success) {
                                 LOGGER.info(result.message);
                             } else {
@@ -269,7 +281,7 @@ public class SakuraUpdaterServerStandalone {
                     String version = parts[0];
                     String description = parts[1];
                     ServerCommandsHelper.CommandResult result = ServerCommandsHelper.commitData(version,
-                            description);
+                            description, PublishProgress.throttled(LOGGER::info, 1000));
                     if (result.success) {
                         LOGGER.info(result.message);
                     } else {
