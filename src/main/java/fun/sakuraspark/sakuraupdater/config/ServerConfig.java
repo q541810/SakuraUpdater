@@ -40,11 +40,24 @@ public class ServerConfig {
                     + "With the client default of 8 connections, 32 threads means 4 players can update at the same time.")
             .defineInRange("max_threads", 32, 4, 256);
 
+    // 发布目录：commit / data repair 时把同步目录镜像到这里，名单也从这里扫描，文件服务器只从这里发文件
+    private static final ForgeConfigSpec.ConfigValue<String> RELEASE_DIR = BUILDER
+            .comment("----IMPORTANT!!! Needs to restart!!!----\n"
+                    + "Directory holding the published snapshot of the sync source directories.\n"
+                    + "Only 'commit' and 'data repair' write here: they mirror the sync source directories into this "
+                    + "directory and build the file list from it, and the file server only serves files from here.\n"
+                    + "As a result, adding/removing/overwriting files in the sync directories WITHOUT committing no longer "
+                    + "affects clients: they keep getting the last published snapshot, so a forgotten commit can no longer "
+                    + "leave clients stuck in an endless update.\n"
+                    + "Do NOT edit files in this directory by hand, it is managed by SakuraUpdater.")
+            .define("RELEASE_DIR", "sakuraupdater-release");
+
     // a list of strings that are treated as sync directories
     private static final ModConfigSpec.ConfigValue<List<? extends String>> SYNC_DIR = BUILDER
             .comment(
                     "A list of sync directories, each entry should be in the format 'targetpath:mode[:sourcepath:sourcepath2:...]', e.g. 'mod:mirror' or 'config:push:clientconfig'.\n"
                             + "The 'targetpath' is the client target path of sync, and 'sourcepath' is the server source path of sync.\n"
+                            + "These source directories are the ones you edit by hand; they are copied into RELEASE_DIR when you commit.\n"
                             + "The 'sourcepath' is optional, if not provided, it will be the same as 'targetpath'.\n"
                             + "'mode' can be 'mirror', 'push' or 'ignore'. 'mirror' will delete files in the target directory that are not in the source directory, while 'push' will not.\n"
                             + "'ignore' mode uses regex to exclude files. Since the path is included, '.*filename$' is recommended (e.g., 'mods:ignore:.*abc\\.jar$').\n"
@@ -66,6 +79,9 @@ public class ServerConfig {
 
     /** 文件服务器线程池大小，见 max_threads 配置项 */
     public static int maxThreads = 32;
+
+    /** 发布目录，见 RELEASE_DIR 配置项 */
+    public static String releaseDir = "sakuraupdater-release";
 
     private static boolean validateKeyMap(final Object obj) {
         if (obj instanceof String path && path.split(":").length >= 2) {
@@ -96,10 +112,15 @@ public class ServerConfig {
         return maxThreads;
     }
 
+    public static String getReleaseDir() {
+        return releaseDir;
+    }
+
     @SubscribeEvent
     public static void onLoad(final ModConfigEvent.Loading event) {
         port = PORT.get();
         maxThreads = MAX_THREADS.get();
+        releaseDir = RELEASE_DIR.get();
         SakuraUpdaterServer.getInstance().runServer();
     }
 
