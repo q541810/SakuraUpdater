@@ -41,7 +41,7 @@ public class ServerConfig {
             .defineInRange("max_threads", 32, 4, 256);
 
     // 发布目录：commit / data repair 时把同步目录镜像到这里，名单也从这里扫描，文件服务器只从这里发文件
-    private static final ForgeConfigSpec.ConfigValue<String> RELEASE_DIR = BUILDER
+    private static final ModConfigSpec.ConfigValue<String> RELEASE_DIR = BUILDER
             .comment("----IMPORTANT!!! Needs to restart!!!----\n"
                     + "Directory holding the published snapshot of the sync source directories.\n"
                     + "Only 'commit' and 'data repair' write here: they mirror the sync source directories into this "

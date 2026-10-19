@@ -152,23 +152,6 @@ public class SakuraUpdaterServer {
                                 })));
     }
 
-    // ----Create the /ssync data repair command----
-    private LiteralArgumentBuilder<CommandSourceStack> createDataRepairCommand() {
-        return literal("repair")
-                .then(argument("version", string())
-                        .suggests(VERSION_SUGGESTIONS)
-                        .executes(context -> {
-                            String version = getString(context, "version");
-                            CommandResult result = ServerCommandsHelper.repairData(version);
-                            if (!result.success) {
-                                sendFailureMessage(context.getSource(), result.message);
-                                return 0;
-                            }
-                            sendSuccessMessage(context.getSource(), result.message);
-                            return 1;
-                        }));
-    }
-
     // ----Create the /ssync data list command----
     private LiteralArgumentBuilder<CommandSourceStack> createDataListCommand() {
         return literal("list")

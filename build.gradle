@@ -249,7 +249,7 @@ tasks.register('releasePublisherTest', JavaExec) {
     dependsOn tasks.named('testClasses')
     classpath = files(sourceSets.test.output, sourceSets.main.output) + configurations.downloadProgressTestRuntime
     mainClass = 'fun.sakuraspark.sakuraupdater.ReleasePublisherTest'
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
 }
 tasks.named('check') { dependsOn tasks.named('releasePublisherTest') }
 
